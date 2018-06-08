@@ -15,13 +15,13 @@
 @test "init with used name" {
    run ../bin/lzt --dir data/zdf init func1a mod2
    [ "$status" -eq 1 ]
-   [ "$output" = 'Error: "func1a" exists already in "mod1".' ]
+   [ "$output" = 'Error: "func1a" exists in module "mod1".' ]
 }
 
 @test "init with invalid module name" {
-   run ../bin/lzt --dir data/zdf init xyz mod3
+   run ../bin/lzt --dir data/zdf init anewfunc unknown
    [ "$status" -eq 1 ]
-   [ "$output" = 'Error: "mod3" is not a valid module.' ]
+   [ "$output" = 'Error: "unknown" is not a valid module.' ]
 }
 
 @test "init successfully" {

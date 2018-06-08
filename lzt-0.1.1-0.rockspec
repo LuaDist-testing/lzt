@@ -1,7 +1,7 @@
 -- This file was automatically generated for the LuaDist project.
 
 package = "lzt"
-version = "0.1.0-0"
+version = "0.1.1-0"
 
 description = {
    summary = "command-line tool to work with a luazdf repository",
@@ -11,14 +11,14 @@ description = {
 
 -- LuaDist source
 source = {
-  tag = "0.1.0-0",
+  tag = "0.1.1-0",
   url = "git://github.com/LuaDist-testing/lzt.git"
 }
 -- Original source
 -- source = {
---    url = "https://github.com/aiq/lzt/archive/v0.1.0.tar.gz",
---    md5 = "05e73dab47d7b3a6e871b0b658293a28",
---    dir = "lzt-0.1.0"
+--    url = "https://github.com/aiq/lzt/archive/v0.1.1.tar.gz",
+--    md5 = "5e59318ac82d7e4579f606a948866fe4",
+--    dir = "lzt-0.1.1"
 -- }
 
 dependencies = {

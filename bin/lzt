@@ -2,19 +2,40 @@
 
 --------------------------------------------------------------------------------
 --LuaZDF-begin --with addedge appendall basename buildgraph buildset currentdir
---+ difference dirfiles dirhas dirname dirtree escapeshellarg explode findif
---+ flatten getoptvalues isdir isempty keys leftpad longextname map matchesf
---+ mkdirtree notf readargsfile readfile readlines removeif removerange reverse
---+ rmdirtree rmprefix rmsuffix slice startswith subdirs trim tsort2d values
---+ writelines
+--+ deepcopy difference dirfiles dirhas dirname dirtree escapeshellarg explode
+--+ findif flatten getoptvalues indexof isdir isempty keys leftpad longextname
+--+ map matchesf mkdirtree notf readargsfile readfile readlines removeif
+--+ removerange reverse rmdirtree rmprefix rmsuffix slice startswith subdirs
+--+ trim tsort2d values without writelines
 --------------------------------------------------------------------------------
-local lfs = require( "lfs" )  --ZREQ-lfs
+local lfs = require( "lfs" ) --ZREQ-lfs
 --ZFUNC-appendall-v1
 local function appendall( arr, oth ) --> arr
    for _, v in ipairs( oth ) do
       table.insert( arr, v )
    end
    return arr
+end
+--ZFUNC-deepcopy-v1
+local function deepcopy( tab ) --> copy
+   if type( tab ) ~= "table" then return tab end
+	local mt = getmetatable( tab )
+	local copy = {}
+	for k, v in pairs( tab ) do
+		if type( v ) == "table" then v = deepcopy( v ) end
+		copy[ k ] = v
+	end
+	setmetatable( copy, mt )
+	return copy
+end
+--ZFUNC-indexof-v1
+local function indexof( arr, val, init ) --> idx
+   init = init or 1
+   for idx = init, #arr do
+      local v = arr[ idx ]
+      if v == val then return idx end
+   end
+   return nil
 end
 --ZFUNC-readlines-v1
 local function readlines( filename ) --> strlst, err
@@ -123,15 +144,6 @@ local function currentdir() --> path
 end
 --ZFUNC-difference-v1
 local function difference( a, b ) --> res
-   --ZFUNC-indexof-v1
-   local function indexof( arr, val, startidx )
-      startidx = startidx or 1
-      for i = startidx, #arr do
-         local v = arr[ i ]
-         if v == val then return i end
-      end
-      return nil
-   end
    local res = {}
    for _, v in ipairs( a ) do
       if not indexof( b, v ) then table.insert( res, v ) end
@@ -373,7 +385,7 @@ local function mkdirtree( tree, root ) --> res, err
    local function writefile( filename, ... )
       local f, err = io.open( filename, "w" )
       if err then return nil, err end
-      f, err = f:write( ... )
+      local wres, err = f:write( ... )
       if err then return nil, err end
       return f:close()
    end
@@ -622,18 +634,6 @@ local function tsort2d( graph ) --> groups, err
       end
       return transpose
    end
-   --ZFUNC-deepcopy-v1
-   local function deepcopy( tab )
-      if type( tab ) ~= "table" then return tab end
-	   local mt = getmetatable( tab )
-	   local copy = {}
-	   for k, v in pairs( tab ) do
-		   if type( v ) == "table" then v = deepcopy( v ) end
-		   copy[ k ] = v
-	   end
-	   setmetatable( copy, mt )
-	   return copy
-   end
    --ZFUNC-isfilled-v1
    local function isfilled( tab )
       for _, v in pairs( tab ) do return true end
@@ -670,12 +670,27 @@ local function values( tab ) --> arr
    end
    return arr
 end
+--ZFUNC-without-v1
+local function without( tab, ... ) --> reduced
+   local values = { ... }
+   local ignore = {}
+   for _, v in ipairs( values ) do
+      ignore[ v ] = true
+   end
+   local reduced = {}
+   for _, v in ipairs( tab ) do
+      if not ignore[ v ] then
+         table.insert( reduced, v )
+      end
+   end
+   return reduced
+end
 --ZFUNC-writelines-v1
 local function writelines( filename, strlst ) --> res, err
    local f, err = io.open( filename, "w" )
    if err then return nil, err end
    for _, str in ipairs( strlst ) do
-      f, err = f:write( str, "\n" )
+      local wres, err = f:write( str, "\n" )
       if err then return nil, err end
    end
    return f:close()
@@ -689,6 +704,13 @@ local lustache = require( "lustache" )
 --------------------------------------------------------------------------------
 -- Output Util Functions
 --------------------------------------------------------------------------------
+
+local function setrange( arr, i, j, val )
+   for n = i, j do
+      arr[ n ] = val
+   end
+   return arr
+end
 
 local debug = false
 local normalOutput = true
@@ -830,12 +852,15 @@ local function buildztree( dir )
       return res
    end
 
-   -- zfunc = { name, version, level, firstline, lastline }
+   -- zfunc = { name, version, level, firstline, lastline, main }
    -- zreq  = { name, line, linenumber }
-   -- info  = { 
+   -- chunk = { firstline, lastline }
+   -- info  = {
+   --    hasglobals = bool
    --    mainfn = zfunc
    --    fn = zfunc*
    --    req = zreq*
+   --    g = chunk*
    -- }
    ztree.infofor = function ( self, func )
       local impl, err = self:implfor( func )
@@ -850,11 +875,15 @@ local function buildztree( dir )
       local info = {}
 
       info.reinit = function ( info, strlst )
+         info.hasglobals = false
          info.lines = strlst
          info.req = {}
          info.fn = {}
+         info.g = deepcopy( strlst )
          for i = 1, #strlst do
             local line = strlst[ i ]
+            
+            --fn
             local x, _, name, version = string.find( line, self.funcpattern )
             if name then
                local zfunc = {}
@@ -862,18 +891,22 @@ local function buildztree( dir )
                zfunc.version = version
                zfunc.firstline = i
                zfunc.level = x-1
+               zfunc.main = zfunc.name == func
+               if zfunc.level == 0 and not zfunc.main then info.hasglobals = true end
                local search = string.rep( " ", zfunc.level ).."end"
                for j = i+1, #strlst do
                   local endline = strlst[ j ]
                   if zfunc.lastline == nil and startswith( endline, search ) then
                      zfunc.lastline = j
-                     if isempty( info.fn ) then info.mainfn = zfunc end
+                     if zfunc.main then info.mainfn = zfunc end
                      info.fn[ zfunc.name ] = zfunc
                      j = #strlst
+                     setrange( info.g, i, j, "--WITHOUTLINE--" )
                   end
                end
             end
 
+            -- req
             local y, _, mname = string.find( line, self.reqpattern )
             if mname then
                local zreq = {}
@@ -881,8 +914,11 @@ local function buildztree( dir )
                zreq.line = line
                zreq.linenumber = i
                info.req[ mname ] = zreq
+               setrange( info.g, i, i, "--WITHOUTLINE--" )
             end
          end
+         info.g = without( info.g, "--WITHOUTLINE--" )
+         if #info.g > 0 then info.hasglobals = true end
       end
 
       info.removefn = function ( info, func )
@@ -899,6 +935,16 @@ local function buildztree( dir )
          return line
       end
 
+      info.getlines = function ( info )
+         if not info.hasglobals then return info.lines end
+         
+         local result = { "local "..info.mainfn.name.." = (function() " }
+         appendall( result, info.lines )
+         table.insert( result, "return "..info.mainfn.name )
+         table.insert( result, "end)()" )
+         return result
+      end
+      
       info:reinit( strlst )
 
       return info
@@ -988,6 +1034,16 @@ local function buildbeginlines( opt, optvalues )
    return lines
 end
 
+local luaFuncNames = { "assert", "collectgarbage", "dofile", "error", "getfenv",
+   "getmetatable", "ipairs", "load", "loadfile", "loadstring", "module", "next",
+   "pairs", "pcall", "print", "rawequal", "rawget", "rawlen", "rawset",
+   "require", "select", "setfenv", "setmetatable", "tonumber", "tostring",
+   "type", "unpack", "xpcall" }
+
+local luaKeyWords = { "and", "break", "do", "else", "elseif", "end", "false",
+   "for", "function", "goto", "if", "in", "local", "nil", "not", "or", "repeat",
+   "return", "then", "true", "until", "while" }
+
 local function getreqs( funcinfos )
    local reqs = {}
    local dbgi = {}
@@ -1013,7 +1069,7 @@ local function getfuncorder( funcinfos )
    local graph = buildgraph( keys( funcinfos ), {} )
    for fname, info in pairs( funcinfos ) do
       for subfname, fn in pairs( info.fn ) do
-         if info.fn[ subfname ] and fn.level > 0 and funcinfos[ subfname ] then
+         if info.fn[ subfname ] and not fn.main and funcinfos[ subfname ] then
             info:removefn( subfname )
             debugln( "addedge:", subfname, fname )
             addedge( graph, subfname, fname )
@@ -1029,13 +1085,32 @@ local function getfuncorder( funcinfos )
    return flatten( groups )
 end
 
+local function goodname( name, ztree )
+   if ztree and ztree.fn[ name ] then
+      errfln( "%q exists in module %q.", name, ztree.fn[ name ] )
+      return false
+   end
+
+   if indexof( luaKeyWords, name ) then
+      errfln( "%q is a Lua keyword.", name )
+      return false
+   end
+
+   if indexof( luaFuncNames, name ) then
+      errfln( "%q exists in the Lua standard library.", name )
+      return false
+   end
+
+   return true
+end
+
 local function usage()
    return [[lzt [--args <file>] [--debug|--justdebug] [--dir <dir>] <subcommand>
 
 These are the existing subcommands:
 
 check                   - checks the consistency
-checkname <name>        - checks if a function <name> is allready used
+checkname <name>        - checks if a function <name> is allowed to use
 info <name>             - shows the information for function <name>
 init <name> <module>    - creates default dir for a new function
 inject <src> [dest]     - injects the functions into src, writes to stdout/dest
@@ -1087,8 +1162,12 @@ if cmd == "check" then
    local problem = false
    local graph = buildgraph( keys( funcinfos ), {} )
    for fname, info in pairs( funcinfos ) do
+      if not goodname( info.mainfn.name ) then
+         return errexit()
+      end
+
       for subfname, fn in pairs( info.fn ) do
-         if fn.level > 0 then
+         if not fn.main then
             local parentfunc = funcinfos[ subfname ]
             if not parentfunc then
                errfln( "%q in %q is not a known ZDF function", subfname, fname )
@@ -1113,15 +1192,15 @@ elseif cmd == "checkname" then
       errexit()
    end
 
-   if ztree.fn[ name ] then
-      printfln( "%q exists in module %q.", name, ztree.fn[ name ] )
-   else
-      printfln( "No function with the name %q.", name )
+   if not goodname( name, ztree ) then
+      return errexit()
    end
+   
+   printfln( "No function with the name %q.", name )
 
 ----------------------------------------------------------------------------info
 elseif cmd == "info" then
-   -- info { fn={  name, version, level firstline, lastline }
+   -- info { fn={  name, version, level firstline, lastline, main }
    --        req={ name, var }
    local name = arg[ 1 ]
    if not name then
@@ -1129,13 +1208,17 @@ elseif cmd == "info" then
       errexit()
    end
    local info = ztree:infofor( name )
-   printfln( "mainfn=%q", info.mainfn.name )--TODO
+   printfln( "mainfn=%q / hasglobals=%q", info.mainfn.name, tostring( info.hasglobals ) )
    for _, f in pairs( info.fn ) do
-      printfln( "name=%q / version=%q / level=%q / [ %d - %d ]", f.name, f.version, f.level, f.firstline, f.lastline )
+      printfln( "name=%q / version=%q / level=%q / [ %d - %d ] / main=%q", f.name, f.version, f.level, f.firstline, f.lastline, tostring( f.main ) )
    end
    printfln( string.rep( "-", 80 ) )
    for _, r in pairs( info.req ) do
       println( r.name, r.line )
+   end
+   printfln( string.rep( "-", 80 ) )
+   for _, l in ipairs( info.g ) do
+      println( l )
    end
    printfln( string.rep( "-", 80 ) )
    for n, l in ipairs( info.lines ) do
@@ -1154,8 +1237,7 @@ elseif cmd == "init" then
       errfln( "init requires the parameter 'module'." )
       errexit()
    end
-   if ztree.fn[ name ] then
-      errfln( "%q exists already in %q.", name, ztree.fn[ name ] )
+   if not goodname( name, ztree ) then
       errexit()
    end
    if not ztree.mod[ mod ] then
@@ -1309,7 +1391,7 @@ elseif cmd == "inject" then
       local fnlines = {}
       for _, f in ipairs( order ) do
          local info = funcinfos[ f ]
-         appendall( fnlines, info.lines )
+         appendall( fnlines, info:getlines() )
       end
  
       local res = {}
@@ -1376,7 +1458,7 @@ elseif cmd == "makelib" then
    local fnlines = {}
    for _, fname in ipairs( order ) do
       local info = funcinfos[ fname ]
-      appendall( fnlines, info.lines )
+      appendall( fnlines, info:getlines() )
    end
 
    local returnlines = {}
@@ -1444,9 +1526,10 @@ elseif cmd == "vdiff" then
 
 ------------------------------------------------------------------------whattodo
 elseif cmd == "whattodo" then
-   local todos = {}
    local functions = keys( ztree.fn )
    table.sort( functions )
+
+   local todos = {}
    for _, f in ipairs( functions ) do
       local subtodos = {}
       for _, todo in ipairs( ztree:todosfor( f ) ) do
@@ -1462,10 +1545,23 @@ elseif cmd == "whattodo" then
       end
    end
    if #todos > 0 then
+      println( "todos:" )
       printfln( table.concat( todos, "\n" ) )
    end
 
---------------------------------------------------------------------------error
+   local tempfn = {}
+   for _, f in ipairs( functions ) do
+      local info = ztree:infofor( f )
+      if info.mainfn.version == 0 then
+         table.insert( tempfn, info.mainfn.name )
+      end
+   end
+   if #tempfn > 0 then
+      println( "temporary functions:" )
+      printfln( table.concat( tempfn, "\n" ) )
+   end
+
+---------------------------------------------------------------------------error
 else
    errfln( "%q is not a valid command.", cmd )
    errexit()
